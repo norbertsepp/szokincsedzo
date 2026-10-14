@@ -1,0 +1,60 @@
+name: Build word data
+
+# Run this by hand (Actions tab -> Build word data -> Run workflow).
+# It rebuilds web/public/data/synonyms.json and definitions.json and commits them;
+# the "Deploy app" workflow then publishes the new data automatically.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'How many definition entries to collect from Wiktionary'
+        default: '2500'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      VOCAB_CONTACT: https://github.com/${{ github.repository }}
+    defaults:
+      run:
+        working-directory: tools
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Synonyms (LibreOffice thesaurus + frequency list)
+        run: python -m vocabtools.build_synonyms
+      - name: Definitions (Hungarian Wiktionary)
+        run: python -m vocabtools.build_definitions --target "${{ github.event.inputs.target || '2500' }}"
+      - name: Show how two real pages parse (only if the build failed)
+        if: failure()
+        run: |
+          python -m vocabtools.build_definitions --dump-page alma || true
+          python -m vocabtools.build_definitions --dump-page szó || true
+      - name: Keep samples of rejected pages (download from the run page, send to Claude if the yield is low)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reject-samples
+          path: tools/cache/reject_samples.json
+          if-no-files-found: ignore
+      - name: Commit data
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/public/data
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "Update word data"
+            git push
+          fi

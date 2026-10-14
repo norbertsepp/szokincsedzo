@@ -1,0 +1,43 @@
+name: Daily reminder
+
+# Sends a push notification (via ntfy.sh) with a link to the trainer, but only if
+# today's two sessions are not finished yet. The app updates progress.json in this
+# repository whenever you complete a session, which is how the check knows.
+#
+# Cron times are UTC. 06:30 UTC = 08:30 in Budapest in summer (07:30 in winter);
+# 17:00 UTC = 19:00 / 18:00. Edit freely.
+on:
+  schedule:
+    - cron: '30 6 * * *'
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is today already done?
+        id: check
+        run: |
+          TODAY=$(TZ=Europe/Budapest date +%F)
+          if jq -e --arg d "$TODAY" '(.done // []) | index($d)' progress.json > /dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$TODAY is already completed - no reminder."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send push notification
+        if: steps.check.outputs.skip != 'true'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          jq -n --arg topic "$NTFY_TOPIC" --arg click "$APP_URL" \
+            '{topic:$topic, title:"Szókincs-edző", message:"A mai szó- és szinonimagyakorlat még vár rád.", click:$click, tags:["books"], priority:3}' \
+          | curl -sS -f -H "Content-Type: application/json" -d @- https://ntfy.sh
